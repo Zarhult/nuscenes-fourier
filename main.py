@@ -258,8 +258,8 @@ def main():
                     f_g_shift = np.fft.fftshift(f_g)
                     f_b = np.fft.fftn(img_b)
                     f_b_shift = np.fft.fftshift(f_b)
-                    HIGH_D = 10
-                    LOW_D = 10
+                    HIGH_D = args.d # d value in high pass filter
+                    LOW_D = args.d # d value in low pass filter
 
                     high_parts_f_r_shift = gaussian_filter_high_pass(f_r_shift.copy(), D=HIGH_D)
                     low_parts_f_r_shift = gaussian_filter_low_pass(f_r_shift.copy(), D=LOW_D)
