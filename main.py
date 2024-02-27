@@ -291,7 +291,7 @@ def main():
                 for image_filename in filename_list:
                     print(f'processing {image_filename}')
                     image = Image.open(dir_full_path + '/' + image_filename)
-                    new_filename_list = filename_list
+                    new_filename_list = filename_list.copy()
                     new_filename_list.remove(image_filename) # so don't end up picking same image as interference image
                     interference_image_filename = random.choice(new_filename_list)
                     interference_image = Image.open(dir_full_path + '/' + interference_image_filename)
@@ -318,7 +318,7 @@ def main():
                 for image_filename in filename_list:
                     print(f'processing {image_filename}')
                     image = Image.open(dir_full_path + '/' + image_filename)
-                    new_filename_list = filename_list
+                    new_filename_list = filename_list.copy()
                     new_filename_list.remove(image_filename) # so don't end up picking same image as interference image
                     interference_image_filename = random.choice(new_filename_list)
                     interference_image = Image.open(dir_full_path + '/' + interference_image_filename)
