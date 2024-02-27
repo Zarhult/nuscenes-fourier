@@ -5,6 +5,7 @@ import torch
 import random
 import os
 import pathlib
+import random
 from PIL import Image
 
 # get the low frequency using Gaussian Low-Pass Filter
@@ -107,6 +108,25 @@ def augment_image(r_img, i_img, D): # reference image, interference image
     img = Image.fromarray(rgbArray)
     return img
 
+def augment_image_low(r_img, i_img, D): # reference image, interference image
+    channel_num = random.randrange(0,3) # Randomize which channel to interfere with - 0 is red, 1 is green, 2 is blue
+    i_img_low_high_parts = low_high_pass_rgb(i_img, D)
+    r_img_low_high_parts = low_high_pass_rgb(r_img, D)
+
+    augmented_low_high_parts_r = r_img_low_high_parts[1][0] + (i_img_low_high_parts[0][0] if channel_num == 0 else r_img_low_high_parts[0][0])
+    augmented_low_high_parts_g = r_img_low_high_parts[1][1] + (i_img_low_high_parts[0][1] if channel_num == 1 else r_img_low_high_parts[0][1])
+    augmented_low_high_parts_b = r_img_low_high_parts[1][2] + (i_img_low_high_parts[0][2] if channel_num == 2 else r_img_low_high_parts[0][2])
+    img_r = ifft(augmented_low_high_parts_r)
+    img_g = ifft(augmented_low_high_parts_g)
+    img_b = ifft(augmented_low_high_parts_b)
+    h, w = augmented_low_high_parts_r.shape # doesn't matter which channel we use here
+    rgbArray = np.zeros((h,w,3), 'uint8')
+    rgbArray[:, :, 0] = img_r
+    rgbArray[:, :, 1] = img_g
+    rgbArray[:, :, 2] = img_b
+    img = Image.fromarray(rgbArray)
+    return img
+
 def main():
     # Training settings
     parser = argparse.ArgumentParser(description='FFT/iFFT test')
@@ -140,6 +160,10 @@ def main():
                         help='get the low frequency components of the reference image in RGB')
     parser.add_argument('--nuscenes-samples-preprocess', action='store_true', default=False,
                         help='save low and high frequency components of nuscenes samples to new directory "preproces"')
+    parser.add_argument('--nuscenes-samples-augment-high', action='store_true', default=False,
+                        help='save randomly high-frequency augmented versions of images')
+    parser.add_argument('--nuscenes-samples-augment-low', action='store_true', default=False,
+                        help='save randomly low-frequency augmented versions of images')
     args = parser.parse_args()
     use_cuda = not args.no_cuda and torch.cuda.is_available()
     #use_mps = not args.no_mps and torch.backends.mps.is_available()
@@ -196,6 +220,7 @@ def main():
             rgbArray[:, :, 2] = ifft(low_freq_img[2])
             low_freq_img = Image.fromarray(rgbArray)
             low_freq_img.show()
+    # todo: use refactored functions here
     elif args.nuscenes_samples_preprocess:
         samples_dir = '/share/data/nuscenes/samples'
         save_dir = '/share/data/nuscenes/preprocess'
@@ -248,6 +273,60 @@ def main():
                     image_filename_ext = image_filename_path.suffix
                     high_parts_img.save(save_dir + '/' + dir + '/' + str(image_filename_no_ext) + '_highfreq' + image_filename_ext)
                     low_parts_img.save(save_dir + '/' + dir + '/' + str(image_filename_no_ext) + '_lowfreq' + image_filename_ext)
+    elif args.nuscenes_samples_augment_high:
+        samples_dir = '/share/data/nuscenes/samples'
+        save_dir = '/share/data/nuscenes/augmented_high'
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+
+        for dir in os.listdir(samples_dir):
+            if dir[0:3] == 'CAM': # only process camera images
+                print(f'processing {dir}')
+                if not os.path.exists(save_dir + '/' + dir):
+                    os.makedirs(save_dir + '/' + dir)
+                dir_full_path = samples_dir + '/' + dir
+                filename_list = []
+                for image_filename in os.listdir(dir_full_path):
+                    filename_list.append(image_filename)
+                for image_filename in filename_list:
+                    print(f'processing {image_filename}')
+                    image = Image.open(dir_full_path + '/' + image_filename)
+                    new_filename_list = filename_list
+                    new_filename_list.remove(image_filename) # so don't end up picking same image as interference image
+                    interference_image_filename = random.choice(new_filename_list)
+                    interference_image = Image.open(dir_full_path + '/' + interference_image_filename)
+                    augmented_image = augment_image(image, interference_image, args.d)
+                    image_filename_path = pathlib.Path(image_filename)
+                    image_filename_no_ext = image_filename_path.with_suffix('') # get rid of extension
+                    image_filename_ext = image_filename_path.suffix
+                    augmented_image.save(save_dir + '/' + dir + '/' + str(image_filename_no_ext) + '_augmented' + image_filename_ext)
+    elif args.nuscenes_samples_augment_low:
+        samples_dir = '/share/data/nuscenes/samples'
+        save_dir = '/share/data/nuscenes/augmented_low'
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+
+        for dir in os.listdir(samples_dir):
+            if dir[0:3] == 'CAM': # only process camera images
+                print(f'processing {dir}')
+                if not os.path.exists(save_dir + '/' + dir):
+                    os.makedirs(save_dir + '/' + dir)
+                dir_full_path = samples_dir + '/' + dir
+                filename_list = []
+                for image_filename in os.listdir(dir_full_path):
+                    filename_list.append(image_filename)
+                for image_filename in filename_list:
+                    print(f'processing {image_filename}')
+                    image = Image.open(dir_full_path + '/' + image_filename)
+                    new_filename_list = filename_list
+                    new_filename_list.remove(image_filename) # so don't end up picking same image as interference image
+                    interference_image_filename = random.choice(new_filename_list)
+                    interference_image = Image.open(dir_full_path + '/' + interference_image_filename)
+                    augmented_image = augment_image_low(image, interference_image, args.d)
+                    image_filename_path = pathlib.Path(image_filename)
+                    image_filename_no_ext = image_filename_path.with_suffix('') # get rid of extension
+                    image_filename_ext = image_filename_path.suffix
+                    augmented_image.save(save_dir + '/' + dir + '/' + str(image_filename_no_ext) + '_augmented' + image_filename_ext)
 
 if __name__ == '__main__':
     main()
