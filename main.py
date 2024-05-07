@@ -140,6 +140,26 @@ def augment_image(r_img, i_img, D, augment_high=True): # reference image, interf
     img = Image.fromarray(rgbArray)
     return img
 
+def enhance_high(img, D):
+    '''Enhance high-frequency information and turn down low-frequency information.'''
+    low_high_parts = low_high_pass_rgb(img, D)
+    low_high_parts[0][0] *= 0.5
+    low_high_parts[0][1] *= 0.5
+    low_high_parts[0][2] *= 0.5
+    low_high_parts[1][0] *= 1.5
+    low_high_parts[1][1] *= 1.5
+    low_high_parts[1][2] *= 1.5
+    img_r = low_high_parts[0][0] + low_high_parts[1][0]
+    img_g = low_high_parts[0][1] + low_high_parts[1][1]
+    img_b = low_high_parts[0][2] + low_high_parts[1][2]
+    h,w = img_r.shape
+    rgbArray = np.zeros((h,w,3), 'uint8')
+    rgbArray[:, :, 0] = ifft(img_r)
+    rgbArray[:, :, 1] = ifft(img_g)
+    rgbArray[:, :, 2] = ifft(img_b)
+    img = Image.fromarray(rgbArray)
+    return img
+
 def perturb_image(img, D, perturb_high=True):
     '''Perturb either high or low frequency information. Default high, otherwise low.'''
     if perturb_high:
@@ -194,6 +214,8 @@ def main():
                         help='show low-frequency perturbation of reference image in RGB')
     parser.add_argument('--perturb-high', action='store_true', default=False,
                         help='show high-frequency perturbation of reference image in RGB')
+    parser.add_argument('--enhance-high', action='store_true', default=False,
+                        help='show reference image with high-frequency information enhanced over low-frequency info')
     parser.add_argument('--nuscenes-samples-preprocess', action='store_true', default=False,
                         help='save low and high frequency components of nuscenes samples to new directory "preproces"')
     parser.add_argument('--nuscenes-samples-augment-high', action='store_true', default=False,
@@ -204,6 +226,8 @@ def main():
                         help='save randomly high-frequency perturbed versions of images')
     parser.add_argument('--nuscenes-samples-perturb-low', action='store_true', default=False,
                         help='save randomly low-frequency perturbed versions of images')
+    parser.add_argument('--nuscenes-samples-enhance-high', action='store_true', default=False,
+                        help='save high frequency enhanced versions of images')
     parser.add_argument('--test', action='store_true', default=False)
     args = parser.parse_args()
     use_cuda = not args.no_cuda and torch.cuda.is_available()
@@ -270,35 +294,55 @@ def main():
         elif args.perturb_high:
             perturbed_image = perturb_image(image, args.d, perturb_high=True)
             perturbed_image.show()
+        elif args.enhance_high:
+            enhanced_image = enhance_high(image, args.d)
+            enhanced_image.show()
         elif args.test:
-            img = np.array(image)
-            f_shift_r = np.fft.fftshift(np.fft.fftn(img[:, :, 0]))
-            f_shift_g = np.fft.fftshift(np.fft.fftn(img[:, :, 1]))
-            f_shift_b = np.fft.fftshift(np.fft.fftn(img[:, :, 2]))
-            h,w = f_shift_r.shape
-            #real_noise = np.random.normal(0, 10000, (h,w))
-            #imaginary_noise = np.random.normal(0, 10000, (h,w))
-            #f_shift_r.real = f_shift_r.real + real_noise
-            #f_shift_r.imag = f_shift_r.imag + imaginary_noise
-            #f_shift_g.real = f_shift_g.real + real_noise
-            #f_shift_g.imag = f_shift_g.imag + imaginary_noise
-            #f_shift_b.real = f_shift_b.real + real_noise
-            #f_shift_b.imag = f_shift_b.imag + imaginary_noise
-            iimg_r = np.fft.ifftshift(f_shift_r)
-            iimg_r = np.fft.ifftn(iimg_r)
-            iimg_r = np.abs(iimg_r)
-            iimg_g = np.fft.ifftshift(f_shift_g)
-            iimg_g = np.fft.ifftn(iimg_g)
-            iimg_g = np.abs(iimg_g)
-            iimg_b = np.fft.ifftshift(f_shift_b)
-            iimg_b = np.fft.ifftn(iimg_b)
-            iimg_b = np.abs(iimg_b)
+            # Emphasizing high over low frequency
+            '''img_f_shift_rgb = f_shift_rgb(image)
+            high_part_r = gaussian_filter_high_pass(img_f_shift_rgb[0].copy(), args.d)*1.5
+            high_part_g = gaussian_filter_high_pass(img_f_shift_rgb[1].copy(), args.d)*1.5
+            high_part_b = gaussian_filter_high_pass(img_f_shift_rgb[2].copy(), args.d)*1.5
+            low_part_r = gaussian_filter_low_pass(img_f_shift_rgb[0].copy(), args.d)*0.5
+            low_part_g = gaussian_filter_low_pass(img_f_shift_rgb[1].copy(), args.d)*0.5
+            low_part_b = gaussian_filter_low_pass(img_f_shift_rgb[2].copy(), args.d)*0.5
+            img_r = high_part_r + low_part_r
+            img_g = high_part_g + low_part_g
+            img_b = high_part_b + low_part_b
+            h,w = img_f_shift_rgb[0].shape
             rgbArray = np.zeros((h,w,3), 'uint8')
-            rgbArray[:, :, 0] = iimg_r
-            rgbArray[:, :, 1] = iimg_g
-            rgbArray[:, :, 2] = iimg_b
-            img = Image.fromarray(rgbArray)
-            img.show()
+            rgbArray[:, :, 0] = ifft(img_r)
+            rgbArray[:, :, 1] = ifft(img_g)
+            rgbArray[:, :, 2] = ifft(img_b)
+            test_img = Image.fromarray(rgbArray)
+            test_img.show()'''
+            # Break down and put image back together in same manner as original paper
+            # Verified result image is exactly identical to using above approach
+            img_f_shift_rgb = f_shift_rgb(image)
+            high_part_r = gaussian_filter_high_pass(img_f_shift_rgb[0].copy(), args.d)
+            high_part_g = gaussian_filter_high_pass(img_f_shift_rgb[1].copy(), args.d)
+            high_part_b = gaussian_filter_high_pass(img_f_shift_rgb[2].copy(), args.d)
+            low_part_r = gaussian_filter_low_pass(img_f_shift_rgb[0].copy(), args.d)
+            low_part_g = gaussian_filter_low_pass(img_f_shift_rgb[1].copy(), args.d)
+            low_part_b = gaussian_filter_low_pass(img_f_shift_rgb[2].copy(), args.d)
+            img_r = high_part_r + low_part_r
+            img_g = high_part_g + low_part_g
+            img_b = high_part_b + low_part_b
+            h,w = img_f_shift_rgb[0].shape
+            rgbArray = np.zeros((h,w,3), 'uint8')
+            i_img_mix1_fda = ifft(img_r)
+            i_img_mix1_fda = np.array(i_img_mix1_fda * 1, np.uint8)
+            i_img_mix2_fda = ifft(img_g)
+            i_img_mix2_fda = np.array(i_img_mix2_fda * 1, np.uint8)
+            i_img_mix3_fda = ifft(img_b)
+            i_img_mix3_fda = np.array(i_img_mix3_fda * 1, np.uint8)
+            i_img_exp_mix1_fda = np.expand_dims(i_img_mix1_fda, axis=2)
+            i_img_exp_mix2_fda = np.expand_dims(i_img_mix2_fda, axis=2)
+            i_img_exp_mix3_fda = np.expand_dims(i_img_mix3_fda, axis=2)
+            i_img_mix_fda = np.append(i_img_exp_mix1_fda, i_img_exp_mix2_fda, axis=2)
+            i_img_mix_fda = np.append(i_img_mix_fda, i_img_exp_mix3_fda, axis=2)
+            i_img_mix_fda = Image.fromarray(i_img_mix_fda[:, :, :])
+            i_img_mix_fda.show()
 
     # todo: use refactored functions here
     elif args.nuscenes_samples_preprocess:
@@ -447,6 +491,26 @@ def main():
                     image_filename_no_ext = image_filename_path.with_suffix('') # get rid of extension
                     image_filename_ext = image_filename_path.suffix
                     perturbed_image.save(save_dir + '/' + dir + '/' + str(image_filename_no_ext) + '_perturbed' + image_filename_ext)
+    elif args.nuscenes_samples_enhance_high:
+        samples_dir = '/share/data/nuscenes/samples'
+        save_dir = '/share/data/nuscenes/enhance_high'
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+
+        for dir in os.listdir(samples_dir):
+            if dir[0:3] == 'CAM': # only process camera images
+                print(f'processing {dir}')
+                if not os.path.exists(save_dir + '/' + dir):
+                    os.makedirs(save_dir + '/' + dir)
+                dir_full_path = samples_dir + '/' + dir
+                for image_filename in os.listdir(dir_full_path):
+                    print(f'processing {image_filename}')
+                    image = Image.open(dir_full_path + '/' + image_filename)
+                    enhanced_image = enhance_high(image, args.d)
+                    image_filename_path = pathlib.Path(image_filename)
+                    image_filename_no_ext = image_filename_path.with_suffix('') # get rid of extension
+                    image_filename_ext = image_filename_path.suffix
+                    enhanced_image.save(save_dir + '/' + dir + '/' + str(image_filename_no_ext) + '_enhanced' + image_filename_ext)
 
 if __name__ == '__main__':
     main()
