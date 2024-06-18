@@ -7,6 +7,7 @@ import os
 import pathlib
 import random
 from PIL import Image
+import matplotlib.pyplot as plt
 
 # get the low frequency using Gaussian Low-Pass Filter
 # high d value tends to make high frequency info empty, low frequency info less blurred (intensifies high filter, weakens low filter)
@@ -34,6 +35,11 @@ def gaussian_filter_high_pass(fshift, D, perturb=False):
     center = (int((h - 1) / 2), int((w - 1) / 2))
     dis_square = (x - center[0]) ** 2 + (y - center[1]) ** 2
     template = 1 - np.exp(- dis_square / (2 * D ** 2)) # larger D value will make template closer to 0
+    # template becomes >0.5 a mere 12 pixels away from center! (with default D)
+    #print(template.shape)
+    #print(template[center[0], center[1] + 12])
+    #print(template[center[0] + 12, center[1]])
+    #assert 0
     if perturb:
         real_noise_factor = np.random.normal(0.5, 0.5, dis_square.shape)
         imaginary_noise_factor = np.random.normal(0.5, 0.5, dis_square.shape)
@@ -43,6 +49,15 @@ def gaussian_filter_high_pass(fshift, D, perturb=False):
         #imaginary_noise = np.random.normal(0, 99999, dis_square.shape)
         #fshift = fshift + real_noise + imaginary_noise * 1j
     return template * fshift
+
+def create_circular_mask(h, w, radius):
+    center = (int(w/2), int(h/2))
+
+    Y, X = np.ogrid[:h, :w]
+    dist_from_center = np.sqrt((X - center[0])**2 + (Y-center[1])**2)
+
+    mask = dist_from_center > radius
+    return mask
 
 # Inverse Fourier transform
 def ifft(fshift):
@@ -71,6 +86,20 @@ def magnitude_visualize(img):
     img_arr_f_shift = f_shift(img_arr)
     # Calculate the magnitude spectrum, scaled so that it is useful for visualization
     magnitude_spectrum = 14*np.log(np.abs(img_arr_f_shift))
+    magnitude_image = Image.fromarray(magnitude_spectrum)
+    return magnitude_image
+
+def magnitude_visualize_raw(img):
+    '''Convert image to grayscale and return visualization of magnitudes of transformed image
+    as-is, with no log or multiplication for ease of visualization.
+    Will probably just give a white pixel in the center.'''
+    image_grayscale = img.convert('L')
+    img_arr = np.array(image_grayscale)
+    img_arr_f_shift = f_shift(img_arr)
+    # Calculate the magnitude spectrum, scaled so that it is useful for visualization
+    magnitudes = np.abs(img_arr_f_shift)
+    max_magnitude = np.max(magnitudes)
+    magnitude_spectrum = np.abs(img_arr_f_shift)/max_magnitude*255
     magnitude_image = Image.fromarray(magnitude_spectrum)
     return magnitude_image
 
@@ -115,6 +144,20 @@ def low_high_pass_rgb(img, D, perturb_low=False, perturb_high=False):
     high_rgb = high_pass_rgb(img, D, perturb_high)
     low_high_rgb = np.array([low_rgb, high_rgb])
     return low_high_rgb
+
+def hard_filter_rgb(img, radius):
+    img_f_shift_rgb = f_shift_rgb(img)
+    h, w = img_f_shift_rgb[0].shape
+    mask = create_circular_mask(h, w, radius)
+    img_f_shift_rgb[0] = img_f_shift_rgb[0] * mask
+    img_f_shift_rgb[1] = img_f_shift_rgb[1] * mask
+    img_f_shift_rgb[2] = img_f_shift_rgb[2] * mask
+    rgbArray = np.zeros((h,w,3), 'uint8')
+    rgbArray[:, :, 0] = ifft(img_f_shift_rgb[0])
+    rgbArray[:, :, 1] = ifft(img_f_shift_rgb[1])
+    rgbArray[:, :, 2] = ifft(img_f_shift_rgb[2])
+    new_img = Image.fromarray(rgbArray)
+    return new_img
 
 def augment_image(r_img, i_img, D, augment_high=True): # reference image, interference image
     channel_num = random.randrange(0,3) # Randomize which channel to interfere with - 0 is red, 1 is green, 2 is blue
@@ -177,6 +220,58 @@ def perturb_image(img, D, perturb_high=True):
     img = Image.fromarray(rgbArray)
     return img
 
+def shuffle_image(img, D, k, radius, restrict=False, shuffleMax=False):
+    channel_num = random.randrange(0,3) # Randomize which channel to interfere with - 0 is red, 1 is green, 2 is blue
+    img_low_high_parts = low_high_pass_rgb(img, D)
+
+    target = img_low_high_parts[1][channel_num] # spectrum to shuffle
+    magnitudes = np.abs(target) # 900 rows by 1600 columns for nuscenes cam image
+    if restrict:
+        # prevent use of strong low frequencies near origin
+        mask = create_circular_mask(magnitudes.shape[0], magnitudes.shape[1], radius)
+        magnitudes = magnitudes * mask
+    if shuffleMax:
+        target_indices_flattened = np.argpartition(magnitudes.flatten(), -1 * k)[-1 * k:]
+    else:
+        target_indices_flattened = np.argpartition(magnitudes.flatten(), k)[:k]
+    target_indices = [np.unravel_index(i, magnitudes.shape) for i in target_indices_flattened]
+    # prints for debugging
+    #sorted_target_indices_flattened = target_indices_flattened[np.argsort(magnitudes.flatten()[target_indices_flattened])]
+    #sorted_target_indices = [np.unravel_index(i, magnitudes.shape) for i in sorted_target_indices_flattened]
+    #for index in sorted_target_indices:
+        #print(index)
+        #print(magnitudes[index[0], index[1]])
+
+    new_indices = random.sample(target_indices, len(target_indices))
+    for i, pixel in enumerate(target_indices):
+        new = new_indices[i] # pixel to swap with
+        new_y = new[0]
+        new_x = new[1]
+        old_y = pixel[0]
+        old_x = pixel[1]
+        temp = target[old_y, old_x]
+        target[old_y, old_x] = target[new_y, new_x]
+        target[new_y, new_x] = temp
+
+    shuffled_low_high_parts_r = img_low_high_parts[0][0] + img_low_high_parts[1][0]
+    shuffled_low_high_parts_g = img_low_high_parts[0][1] + img_low_high_parts[1][1]
+    shuffled_low_high_parts_b = img_low_high_parts[0][2] + img_low_high_parts[1][2]
+
+    #shuffled_low_high_parts_r[440:460, 790:810] = 0
+    #shuffled_low_high_parts_g[440:460, 790:810] = 0
+    #shuffled_low_high_parts_b[440:460, 790:810] = 0
+
+    img_r = ifft(shuffled_low_high_parts_r)
+    img_g = ifft(shuffled_low_high_parts_g)
+    img_b = ifft(shuffled_low_high_parts_b)
+    h, w = shuffled_low_high_parts_r.shape # doesn't matter which channel we use here
+    rgbArray = np.zeros((h,w,3), 'uint8')
+    rgbArray[:, :, 0] = img_r
+    rgbArray[:, :, 1] = img_g
+    rgbArray[:, :, 2] = img_b
+    img = Image.fromarray(rgbArray)
+    return img
+
 def main():
     # Training settings
     parser = argparse.ArgumentParser(description='FFT/iFFT test')
@@ -186,12 +281,21 @@ def main():
                         help='input batch size for testing (default: 1000)')
     parser.add_argument('--reference-image', type=str, metavar='filename',
                         help='reference image to transform or augment with interference image')
-    parser.add_argument('--interference-image', type=str, metavar='filename',
+    parser.add_argument('--interference-image', type=str, metavar='interference filename',
                         help='interference image used to augment reference image')
     parser.add_argument('--seed', type=int, default=1, metavar='S',
                         help='random seed (default: 1)')
-    parser.add_argument('--d', type=int, default=10, metavar='S',
+    parser.add_argument('--d', type=int, default=10,
                         help='d value in gaussian function')
+    parser.add_argument('--k', type=int, default=10,
+                        help='k value in shuffle function')
+    parser.add_argument('--radius', type=int, default=100,
+                        help='k value in shuffle function')
+    parser.add_argument('--restrict', action='store_true', default=False,
+                        help='blocks frequencies near the center in fourier'
+                             'domain from being considered for shuffling')
+    parser.add_argument('--shuffle-max', action='store_true', default=False,
+                        help='shuffle frequencies of max magnitude')
     parser.add_argument('--no-cuda', action='store_true', default=False,
                         help='disables CUDA training')
     #parser.add_argument('--no-mps', action='store_true', default=False,
@@ -202,6 +306,8 @@ def main():
                         help='show image augmented in the same manner as the FDA paper')
     parser.add_argument('--magnitude-visualize', action='store_true', default=False,
                         help='show visualization of magnitudes of transformed image')
+    parser.add_argument('--magnitude-visualize-raw', action='store_true', default=False,
+                        help='show raw visualization of magnitudes of transformed image')
     parser.add_argument('--phase-visualize', action='store_true', default=False,
                         help='show visualization of phase angles of transformed image')
     parser.add_argument('--magnitude-visualize-rgb', action='store_true', default=False,
@@ -216,6 +322,8 @@ def main():
                         help='show high-frequency perturbation of reference image in RGB')
     parser.add_argument('--enhance-high', action='store_true', default=False,
                         help='show reference image with high-frequency information enhanced over low-frequency info')
+    parser.add_argument('--shuffle', action='store_true', default=False,
+                        help='show reference image with high-frequency information shuffled')
     parser.add_argument('--nuscenes-samples-preprocess', action='store_true', default=False,
                         help='save low and high frequency components of nuscenes samples to new directory "preproces"')
     parser.add_argument('--nuscenes-samples-augment-high', action='store_true', default=False,
@@ -264,6 +372,9 @@ def main():
         elif args.magnitude_visualize:
             magnitude_image = magnitude_visualize(image)
             magnitude_image.show()
+        elif args.magnitude_visualize_raw:
+            magnitude_image = magnitude_visualize_raw(image)
+            magnitude_image.show()
         elif args.phase_visualize:
             phase_image = phase_visualize(image)
             phase_image.show()
@@ -297,6 +408,48 @@ def main():
         elif args.enhance_high:
             enhanced_image = enhance_high(image, args.d)
             enhanced_image.show()
+        elif args.shuffle:
+            restrict = False
+            shuffleMax = False
+            if args.restrict:
+                restrict = True
+            if args.shuffle_max:
+                shuffleMax = True
+            shuffled_image = shuffle_image(image, args.d, args.k, args.radius, restrict, shuffleMax)
+            shuffled_magnitude_image = magnitude_visualize(shuffled_image)
+            shuffled_image.show()
+            shuffled_magnitude_image.show()
+            # test: what if shuffle high freq image
+            '''high_freq_image = high_pass_rgb(image, args.d)
+            h,w = high_freq_image[0].shape
+            rgbArray = np.zeros((h,w,3), 'uint8')
+            rgbArray[:, :, 0] = ifft(high_freq_image[0])
+            rgbArray[:, :, 1] = ifft(high_freq_image[1])
+            rgbArray[:, :, 2] = ifft(high_freq_image[2])
+            high_freq_image = Image.fromarray(rgbArray)
+            high_freq_magnitude_image = magnitude_visualize(high_freq_image)
+
+            shuffled_image = shuffle_image(high_freq_image, args.d, args.k, args.radius, restrict, shuffleMax)
+            shuffled_magnitude_image = magnitude_visualize(shuffled_image)
+            fig, axs = plt.subplots(2, 2, figsize=(20,5)) 
+            axs[0][0].imshow(high_freq_image, cmap='gray')
+            axs[0][0].set_title('High freq img')
+            axs[0][0].axis('off')  # Hide the axis
+
+            axs[0][1].imshow(high_freq_magnitude_image, cmap='gray')
+            axs[0][1].set_title('High freq img magnitudes')
+            axs[0][1].axis('off')
+
+            axs[1][0].imshow(shuffled_image, cmap='gray')
+            axs[1][0].set_title('Shuffled image')
+            axs[1][0].axis('off')
+
+            axs[1][1].imshow(shuffled_magnitude_image, cmap='gray')
+            axs[1][1].set_title('Shuffled image magnitudes')
+            axs[1][1].axis('off')
+
+            plt.tight_layout()  # Adjust subplots to fit into the figure area.
+            plt.show()  # Display the images'''
         elif args.test:
             # Emphasizing high over low frequency
             '''img_f_shift_rgb = f_shift_rgb(image)
