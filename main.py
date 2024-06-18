@@ -8,6 +8,9 @@ import pathlib
 import random
 from PIL import Image
 
+from nuscenes.nuscenes import NuScenes # for categorizing training/testing images
+from nuscenes.utils import splits
+
 # get the low frequency using Gaussian Low-Pass Filter
 # high d value tends to make high frequency info empty, low frequency info less blurred (intensifies high filter, weakens low filter)
 # in other words, high d value increases threshold for what counts as high frequency information rather than low
@@ -345,6 +348,7 @@ def main():
             i_img_mix_fda.show()
 
     # todo: use refactored functions here
+    # maybe one day
     elif args.nuscenes_samples_preprocess:
         samples_dir = '/share/data/nuscenes/samples'
         save_dir = '/share/data/nuscenes/preprocess'
@@ -398,32 +402,71 @@ def main():
                     high_parts_img.save(save_dir + '/' + dir + '/' + str(image_filename_no_ext) + '_highfreq' + image_filename_ext)
                     low_parts_img.save(save_dir + '/' + dir + '/' + str(image_filename_no_ext) + '_lowfreq' + image_filename_ext)
     elif args.nuscenes_samples_augment_high:
-        samples_dir = '/share/data/nuscenes/samples'
-        save_dir = '/share/data/nuscenes/augmented_high'
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
+        data_dir = '/share/code/data/nuscenes/'
+        save_dir_name = 'augmented'
+        nusc = NuScenes(version='v1.0-trainval', dataroot=data_dir, verbose=True)
+        training_filenames = [] # list of all image filenames used for training
+        sensors = ['CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_FRONT_LEFT',
+                   'CAM_BACK', 'CAM_BACK_RIGHT', 'CAM_BACK_LEFT']
 
-        for dir in os.listdir(samples_dir):
-            if dir[0:3] == 'CAM': # only process camera images
-                print(f'processing {dir}')
-                if not os.path.exists(save_dir + '/' + dir):
-                    os.makedirs(save_dir + '/' + dir)
-                dir_full_path = samples_dir + '/' + dir
-                filename_list = []
-                for image_filename in os.listdir(dir_full_path):
-                    filename_list.append(image_filename)
-                for image_filename in filename_list:
-                    print(f'processing {image_filename}')
-                    image = Image.open(dir_full_path + '/' + image_filename)
-                    new_filename_list = filename_list.copy()
-                    new_filename_list.remove(image_filename) # so don't end up picking same image as interference image
-                    interference_image_filename = random.choice(new_filename_list)
-                    interference_image = Image.open(dir_full_path + '/' + interference_image_filename)
-                    augmented_image = augment_image(image, interference_image, args.d)
-                    image_filename_path = pathlib.Path(image_filename)
-                    image_filename_no_ext = image_filename_path.with_suffix('') # get rid of extension
-                    image_filename_ext = image_filename_path.suffix
-                    augmented_image.save(save_dir + '/' + dir + '/' + str(image_filename_no_ext) + '_augmented' + image_filename_ext)
+        if not os.path.exists(data_dir + save_dir_name):
+            os.makedirs(data_dir + save_dir_name)
+        for sensor in sensors:
+            sensor_dir = data_dir + save_dir_name + '/' + sensor
+            if not os.path.exists(sensor_dir):
+                os.makedirs(sensor_dir)
+
+        for index, scene in enumerate(nusc.scene):
+            # go through all samples from training scenes and add their filenames to list
+            if scene['name'] in splits.train:
+                print(f"{scene['name']} is in splits.train")
+                sample = nusc.get('sample', scene['first_sample_token'])
+                done = False
+                while not done:
+                    for sensor in sensors:
+                        filename = nusc.get('sample_data', sample['data'][sensor])['filename']
+                        training_filenames.append(filename)
+                    if sample['next'] == '':
+                        done = True
+                    else:
+                        sample = nusc.get('sample', sample['next'])
+            else:
+                print(f"{scene['name']} is not in splits.train, skipping")
+        print(f'filled training_filenames with {len(training_filenames)} filenames')
+        for index, scene in enumerate(nusc.scene):
+            if scene['name'] in splits.train:
+                # go through training scenes again and generate augmented images
+                sample = nusc.get('sample', scene['first_sample_token'])
+                interference_filenames = training_filenames.copy()
+                done = False
+                scene_filenames = []
+                while not done:
+                    for sensor in sensors:
+                        filename = nusc.get('sample_data', sample['data'][sensor])['filename']
+                        interference_filenames.remove(filename) # ensure interference candidates are exclusively from different scenes
+                        scene_filenames.append(filename)
+                    if sample['next'] == '':
+                        done = True
+                    else:
+                        sample = nusc.get('sample', sample['next'])
+                
+                for filename in scene_filenames:
+                    # generate augmented version of each scene image
+                    filename_path = pathlib.Path(filename)
+                    filename_ext = filename_path.suffix
+                    end_of_filename_path = pathlib.Path(*filename_path.parts[1:]) # something like CAM_FRONT/n015-2018-07-18-11-07-57+0800__CAM_FRONT__1531883549912464.jpg
+                    end_of_filename_path_no_ext = end_of_filename_path.with_suffix('') # get rid of extension
+                    save_filename = data_dir + save_dir_name + '/' + str(end_of_filename_path_no_ext) + '_augmented' + str(filename_ext)
+                    if not os.path.exists(save_filename):
+                        image = Image.open(data_dir + filename) # filename is of the form samples/CAM_BACK/...
+                        interference_filename = random.choice(interference_filenames)
+                        interference_image = Image.open(data_dir + interference_filename)
+                        augmented_image = augment_image(image, interference_image, args.d, augment_high=True)
+                        print(f'saving {save_filename}')
+                        augmented_image.save(save_filename)
+                    else:
+                        print(f'{save_filename} already exists, skipping')
+    
     elif args.nuscenes_samples_augment_low:
         samples_dir = '/share/data/nuscenes/samples'
         save_dir = '/share/data/nuscenes/augmented_low'
@@ -492,8 +535,8 @@ def main():
                     image_filename_ext = image_filename_path.suffix
                     perturbed_image.save(save_dir + '/' + dir + '/' + str(image_filename_no_ext) + '_perturbed' + image_filename_ext)
     elif args.nuscenes_samples_enhance_high:
-        samples_dir = '/share/data/nuscenes/samples'
-        save_dir = '/share/data/nuscenes/enhance_high'
+        samples_dir = '/share/docker_files/data/nuscenes/samples'
+        save_dir = '/share/docker_files/data/nuscenes/enhance_high'
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
 
@@ -504,13 +547,17 @@ def main():
                     os.makedirs(save_dir + '/' + dir)
                 dir_full_path = samples_dir + '/' + dir
                 for image_filename in os.listdir(dir_full_path):
-                    print(f'processing {image_filename}')
-                    image = Image.open(dir_full_path + '/' + image_filename)
-                    enhanced_image = enhance_high(image, args.d)
                     image_filename_path = pathlib.Path(image_filename)
                     image_filename_no_ext = image_filename_path.with_suffix('') # get rid of extension
                     image_filename_ext = image_filename_path.suffix
-                    enhanced_image.save(save_dir + '/' + dir + '/' + str(image_filename_no_ext) + '_enhanced' + image_filename_ext)
+                    save_destination = save_dir + '/' + dir + '/' + str(image_filename_no_ext) + '_enhanced' + image_filename_ext
+                    if not os.path.isfile(save_destination):
+                        print(f'processing {image_filename}')
+                        image = Image.open(dir_full_path + '/' + image_filename)
+                        enhanced_image = enhance_high(image, args.d)
+                        enhanced_image.save(save_destination)
+                    else:
+                        print(f'already processed {image_filename}, skipping')
 
 if __name__ == '__main__':
     main()
