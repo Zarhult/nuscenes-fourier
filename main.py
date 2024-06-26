@@ -9,8 +9,8 @@ import random
 from PIL import Image
 import matplotlib.pyplot as plt
 
-from nuscenes.nuscenes import NuScenes # for categorizing training/testing images
-from nuscenes.utils import splits
+#from nuscenes.nuscenes import NuScenes # for categorizing training/testing images
+#from nuscenes.utils import splits
 
 # get the low frequency using Gaussian Low-Pass Filter
 # high d value tends to make high frequency info empty, low frequency info less blurred (intensifies high filter, weakens low filter)
@@ -40,8 +40,8 @@ def gaussian_filter_high_pass(fshift, D, perturb=False):
     template = 1 - np.exp(- dis_square / (2 * D ** 2)) # larger D value will make template closer to 0
     # template becomes >0.5 a mere 12 pixels away from center! (with default D)
     #print(template.shape)
-    #print(template[center[0], center[1] + 12])
-    #print(template[center[0] + 12, center[1]])
+    #print(template[center[0], center[1] + 20])
+    #print(template[center[0] + 20, center[1]])
     #assert 0
     if perturb:
         real_noise_factor = np.random.normal(0.5, 0.5, dis_square.shape)
@@ -88,7 +88,7 @@ def magnitude_visualize(img):
     img_arr = np.array(image_grayscale)
     img_arr_f_shift = f_shift(img_arr)
     # Calculate the magnitude spectrum, scaled so that it is useful for visualization
-    magnitude_spectrum = 14*np.log(np.abs(img_arr_f_shift))
+    magnitude_spectrum = 10*np.log(np.abs(img_arr_f_shift))
     magnitude_image = Image.fromarray(magnitude_spectrum)
     return magnitude_image
 
@@ -225,6 +225,7 @@ def perturb_image(img, D, perturb_high=True):
 
 def shuffle_image(img, D, k, radius, restrict=False, shuffleMax=False):
     channel_num = random.randrange(0,3) # Randomize which channel to interfere with - 0 is red, 1 is green, 2 is blue
+    #channel_num = 2
     img_low_high_parts = low_high_pass_rgb(img, D)
 
     target = img_low_high_parts[1][channel_num] # spectrum to shuffle
@@ -252,9 +253,10 @@ def shuffle_image(img, D, k, radius, restrict=False, shuffleMax=False):
         new_x = new[1]
         old_y = pixel[0]
         old_x = pixel[1]
-        temp = target[old_y, old_x]
-        target[old_y, old_x] = target[new_y, new_x]
-        target[new_y, new_x] = temp
+        #temp = target[old_y, old_x]
+        #target[old_y, old_x] = target[new_y, new_x]
+        #target[new_y, new_x] = temp
+        target[old_y, old_x], target[new_y, new_x] = target[new_y, new_x], target[old_y, old_x]
 
     shuffled_low_high_parts_r = img_low_high_parts[0][0] + img_low_high_parts[1][0]
     shuffled_low_high_parts_g = img_low_high_parts[0][1] + img_low_high_parts[1][1]
@@ -387,21 +389,52 @@ def main():
         elif args.high_freq:
             high_freq_img = high_pass_rgb(image, args.d)
             h,w = high_freq_img[0].shape
+            # rgbArray for image
             rgbArray = np.zeros((h,w,3), 'uint8')
             rgbArray[:, :, 0] = ifft(high_freq_img[0])
             rgbArray[:, :, 1] = ifft(high_freq_img[1])
             rgbArray[:, :, 2] = ifft(high_freq_img[2])
+            # rgbArray for magnitude spectrum
+            rgbArrayM = np.zeros((h,w,3), 'uint8')
+            #beware: crazy cycling of values in 0-255 range if multiply by too much
+            # add 1 so mag 0 pixels are log(1) = 0
+            rgbArrayM[:, :, 0] = 13*np.log(1+np.abs(high_freq_img[0])) # safe to ignore log of 0 warnings, will just become 0 anyways
+            rgbArrayM[:, :, 1] = 13*np.log(1+np.abs(high_freq_img[1]))
+            rgbArrayM[:, :, 2] = 13*np.log(1+np.abs(high_freq_img[2]))
+            #shift = 0
+            #print(high_freq_img[0][449 + shift, 799 + shift])
+            #print(rgbArrayM[449 + shift, 799 + shift, 2])
+            #assert 0
+
             high_freq_img = Image.fromarray(rgbArray)
+            high_freq_mag = Image.fromarray(rgbArrayM)
             high_freq_img.show()
+            high_freq_mag.show()
+            #high_freq_mag.save('example_high_spectrum.png')
         elif args.low_freq:
             low_freq_img = low_pass_rgb(image, args.d)
             h,w = low_freq_img[0].shape
+            # rgbArray for image
             rgbArray = np.zeros((h,w,3), 'uint8')
             rgbArray[:, :, 0] = ifft(low_freq_img[0])
             rgbArray[:, :, 1] = ifft(low_freq_img[1])
             rgbArray[:, :, 2] = ifft(low_freq_img[2])
+            # rgbArray for magnitude spectrum
+            rgbArrayM = np.zeros((h,w,3), 'uint8')
+            #beware: crazy cycling of values in 0-255 range if multiply by too much
+            # add 1 so mag 0 pixels are log(1) = 0
+            rgbArrayM[:, :, 0] = 13*np.log(1+(np.abs(low_freq_img[0])))
+            rgbArrayM[:, :, 1] = 13*np.log(1+(np.abs(low_freq_img[1])))
+            rgbArrayM[:, :, 2] = 13*np.log(1+(np.abs(low_freq_img[2])))
+            #shift = 10
+            #print(np.abs(low_freq_img[0][450 + shift, 800 + shift]))
+            #print(rgbArrayM[450 + shift, 800 + shift, 0])
+
             low_freq_img = Image.fromarray(rgbArray)
+            low_freq_mag = Image.fromarray(rgbArrayM)
             low_freq_img.show()
+            low_freq_mag.show()
+            #low_freq_mag.save('example_low_spectrum.png')
         elif args.perturb_low:
             perturbed_image = perturb_image(image, args.d, perturb_high=False)
             perturbed_image.show()
